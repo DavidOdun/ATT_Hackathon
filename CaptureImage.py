@@ -1,20 +1,3 @@
-Skip to content
- 
-Search or jump to…
-
-Pull requests
-Issues
-Marketplace
-Explore
- @DavidOdun Sign out
-5
-1 1 Microsoft/MLontheEdgeCodeProject
- Code  Issues 0  Pull requests 0  Projects 0  Wiki  Insights
-MLontheEdgeCodeProject/Scripts/Edge.py
-09414cf  on Aug 24
-@DavidOdun DavidOdun Modified Edge.py to include the ability to send SMS messages with Twi…
-     
-Executable File  455 lines (389 sloc)  21.5 KB
 #!/usr/bin/env python3
 ###############################################################################
 #
@@ -48,20 +31,8 @@ import time
 import tty
 import zipfile
 from datetime import datetime, timedelta
-from azure.storage.blob import BlockBlobService, ContentSettings, PublicAccess
-from iothub_client import IoTHubClient, IoTHubClientError, IoTHubTransportProvider, IoTHubClientResult, IoTHubError, DeviceMethodReturnValue
-from iothub_service_client import IoTHubRegistryManager, IoTHubRegistryManagerAuthMethod
-from iothub_service_client import IoTHubDeviceTwin, IoTHubError
-from twilio.rest import Client
 
 SCRIPT_DIR = os.path.split(os.path.realpath(__file__))[0]
-CONNECTION_STRING = ""
-PROTOCOL = IoTHubTransportProvider.MQTT
-CLIENT = IoTHubClient(CONNECTION_STRING, PROTOCOL)
-SEND_REPORTED_STATE_CONTEXT = 0
-METHOD_CONTEXT = 0
-SEND_REPORTED_STATE_CALLBACKS = 0
-METHOD_CALLBACKS = 0
 
 class PiImageDetection():
     
@@ -81,20 +52,7 @@ class PiImageDetection():
         self.video_preroll = 5
         self.capture_video = False
         self.send_twilio_sms = True
-        azure_key_name = os.environ.get('AZURE_BLOBCONTAINER_NAME')
-        azure_key = os.environ.get('AZURE_BLOBCONTAINER_KEY')
-
-        if azure_key_name is None:
-            logging.debug('Name Error Failed. Exiting....')
-            sys.exit(1)
-
-        if azure_key is None:
-            logging.debug('Key Error Failed. Exiting....')
-            sys.exit(1)
-
-        self.block_blob_service = BlockBlobService(account_name = azure_key_name, account_key = azure_key)
-
-        
+      
     def run_shell(self, cmd):
         """
         Used for running shell commands
@@ -116,17 +74,6 @@ class PiImageDetection():
         # Rename for Better Convention Understanding
         os.rename(output_path, rename_path)
         logging.debug('Video Saved')
-
-    def twilio_messaging(self, prediction_word, prediction_value):
-        account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
-        auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
-        twilio_client = Client(account_sid, auth_token)
-
-        twilio_client.messages.create(
-            to = os.environ.get('MY_PHONE_NUMBER'),
-            from_ = os.environ.get('TWILIO_PHONE_NUMBER'),
-            body = "Prediction(s): {0} & Prediction Confidence: {1}".format(prediction_word, prediction_value)
-                )
 
     def model_predict(self, image):
         # Open the required categories.txt file used for identify the labels for recognized images
@@ -167,103 +114,6 @@ class PiImageDetection():
         with open(json_path, 'w') as json_file:
             json.dump(json_message, json_file)
 
-    def azure_model_update(self, update_json_path): 
-        # List the Models in the blob. There should only be one named zippedpi3
-        model_blob_list = self.block_blob_service.list_blobs(self.model_container_name)
-        found_blob = False
-        for blob in model_blob_list:
-            # Find the given one if there are more than one models
-            if (blob.name == 'zippedpi3'):
-                # Get the Date of the most recent update
-                last_blob_update = str(blob.properties.last_modified)
-                # Leave the loop once we found what we want
-                found_blob = True
-                break
-        # Check to make sure that there is a catch for if there is no zippedpi3 folder on Azure
-        if found_blob == False:
-            logging.debug("No Pi3 was found on Azure. Re-run pi3setup.py and make sure your Azure Blob Storage Account is up to date")
-        
-        # If we don't already got the json just go ahead and create a new one
-        if not os.path.exists(update_json_path) or os.stat(update_json_path).st_size == 0:
-            # Since we did not have the json of infomation about it, go ahead and update to be safe
-            os.system('python3 pisetup.py')
-            # Save the timestamp of the last time things were updated
-            holder = {"lastupdate": last_blob_update}
-            # After updating, make sure we know update the json
-            with open(update_json_path, "w+") as f:
-                f.write(json.dumps(holder))
-
-        # Now that we need know we have it, we need to parse it and decide if we need to update or not
-        with open(update_json_path, "r") as j:
-            json_data = json.load(j)
-            last_model_update = json_data["lastupdate"]
-
-        # If the times are not equal and there has been a change somewhere Update
-        if (last_model_update != last_blob_update):
-            # Check to make sure that we have the pisetup.py script
-            print ('They were not the same so I will be performing an update now')
-            os.system('python3 pisetup.py')
-            
-            # Change the json file to represent the new modified time
-            json_data["lastupdate"] = last_blob_update
-            with open (update_json_path, "w+") as j:
-                json.dump(json_data, j)
-
-    def iothub_client_init(self):
-        if CLIENT.protocol == IoTHubTransportProvider.MQTT or client.protocol == IoTHubTransportProvider.MQTT_WS:
-            CLIENT.set_device_method_callback(self.device_method_callback, METHOD_CONTEXT)
-
-    def send_reported_state_callback(self, status_code, user_context):
-        global SEND_REPORTED_STATE_CALLBACKS
-        print ( "Device twins updated." )
-
-    def device_method_callback(self, method_name, payload, user_context):
-        global METHOD_CALLBACKS
-
-        if method_name == "DeviceConfig":
-            logging.debug( "Waiting for Configuration..." )
-            if payload is not None:
-                print ("Payload Received: {0}".format(payload))
-                # Parse the Payload right here
-                configuration = json.loads(payload)
-                for key, value in dict.items(configuration):
-                    print("Key and Value from Azure: {0} and {1}".format(key, value))
-                    if isinstance(value, str):
-                        if key == "predictionThreshold":
-                            self.prediction_threshold = float(value)
-                        elif key == "captureRate":
-                            self.capture_rate = float(value)
-                        elif key == "cameraResolutionLength":
-                            self.camera_res_len = int(value)
-                        elif key == "cameraResolutionWidth":
-                            self.camera_res_wid = int(value)
-                        elif key == "captureLength":
-                            self.video_capture_length = int(value)
-                        elif key == "capturePreroll":
-                            self.video_preroll = int(value)
-                    elif isinstance(value, bool):
-                        if key == "captureVideo":
-                            self.capture_video = bool(value)
-                    else:
-                        logging.debug("The value was a string")
-                    
-                    
-            current_time = str(datetime.now().isoformat())
-            reported_state = "{\"rebootTime\":\"" + current_time + "\"}"
-            CLIENT.send_reported_state(reported_state, len(reported_state), self.send_reported_state_callback, SEND_REPORTED_STATE_CONTEXT)
-        else:
-            print("Another Method was called")
-
-        # Azure IoT Hub Response
-        device_method_return_value = DeviceMethodReturnValue()
-        device_method_return_value.response = "{ \"Response\": \"Successful Config\" }"
-        device_method_return_value.status = 200
-
-        return device_method_return_value
-    
-    # Function to Upload a specified path to an object to Azure Blob Storage
-    def azure_upload_from_path(self,blob_container,blob_name,blob_object,blob_format):
-        self.block_blob_service.create_blob_from_path(blob_container, blob_name,blob_object, content_settings=ContentSettings(content_type=blob_format))
 
     def get_video(self):
         # Define Variables
@@ -312,34 +162,25 @@ class PiImageDetection():
                     
                     if word is None:
                         logging.debug('No Event Registered')
-                        if self.send_twilio_sms == True:
-                            self.twilio_messaging(word, predict_value)
                         capture_video = False
                         # Format specifically for the Good Folder
                         bad_image_folder = "{0}/badimages".format(self.picture_container_name)
                         # Send Picture to the Bad Images Folder on Azure that can be used to retrain
-                        self.azure_upload_from_path(bad_image_folder, image_name, image_path, 'image/jpeg')
                     elif word is not None and predict_value < self.prediction_threshold:
                         logging.debug('Prediction Value Too Low')
                         capture_video = False
                         # Format Specifically for the Good FOlder
                         bad_image_folder = "{0}/badimages".format(self.picture_container_name)
                         # Send Picture to the Bad Images Folder on Azure that can be used to retrain
-                        self.azure_upload_from_path(bad_image_folder, image_name, image_path, 'image/jpeg')
-                        # Send Twilio Message
                         camera_device.wait_recording(2)
                     else:
                         # See what we got back from the model
                         logging.debug('Event Registered')
                         capture_video=True
                         print('Prediction(s): {}'.format(word))
-                        if self.send_twilio_sms == True:
-                            self.twilio_messaging(word, predict_value)
-
                         # Format specifically for the Good Folder
                         good_image_folder = "{0}/goodimages".format(self.picture_container_name)
                         # Send the Picture to the Good Images Folder on Azure
-                        self.azure_upload_from_path(good_image_folder, image_name, image_path, 'image/jpeg')
                         camera_device.wait_recording(2)
                         # Once it is uploaded, delete the image
                         os.remove(image_path)
@@ -399,11 +240,9 @@ class PiImageDetection():
 
             # Upload Before Videos to Azure Blob Storage
             before_video_folder = "{0}/{1}".format(self.video_container_name, 'beforevideo')
-            self.azure_upload_from_path(before_video_folder, before_mp4, before_mp4_path, 'video/mp4')
 
             # Upload After Videos to Azure Blob Storage
             after_video_folder = "{0}/{1}".format(self.video_container_name, 'aftervideo')
-            self.azure_upload_from_path(after_video_folder, after_mp4, after_mp4_path, 'video/mp4')
 
             # Combine the two mp4 videos into one and save it
             full_video = "MP4Box -cat {0} -cat {1} -new {2}".format(before_mp4_path, after_mp4_path, full_video_path)
@@ -412,13 +251,9 @@ class PiImageDetection():
             
             # Upload Video to Azure Blob Storage
             full_video_folder = "{0}/{1}".format(self.video_container_name, 'fullvideo')
-            self.azure_upload_from_path(full_video_folder, full_path, full_video_path, 'video/mp4')
 
             # Create json and fill it with information
             self.write_json_to_file(video_start_time, word, predict_value, full_path, json_file_path)
-
-            # Upload Json to Azure Blob Storge
-            self.azure_upload_from_path(self.json_container_name, json_file_name, json_file_path, 'application/json')
         
             # End Things
             shutil.rmtree(video_dir_path)
@@ -439,46 +274,17 @@ class PiImageDetection():
         if camera_device is None:
             logging.debug("No Camera Device Found.")
             sys.exit(1)
-
-        # Create Neccesary Containers and Blobs if they don't exist already
-        self.block_blob_service.create_container(self.picture_container_name)
-        self.block_blob_service.create_container(self.video_container_name)
-        self.block_blob_service.create_container(self.model_container_name)
-        self.block_blob_service.create_container(self.json_container_name)
                 
         # Intialize the updates Json File
         update_json_path = "{0}/{1}.json".format(SCRIPT_DIR, 'updatehistory')
         
-        # Intialize IoTHub
-        try:
-            self.iothub_client_init()
-            # Constantly run the Edge.py Script
-            while True:
-                logging.debug('Starting Edge.py')
+        while True:
+            logging.debug('Starting Edge.py')
+            # Began running and stay running the entire project.
+            self.get_video()
 
-                # Check and Run Model Updates
-                self.azure_model_update(update_json_path)
-                
-                # Began running and stay running the entire project.
-                self.get_video()
-        except IoTHubError as iothub_error:
-            print ( "Unexpected error %s from IoTHub" % iothub_error )
-            return
     
 
 if __name__ == '__main__':
     mydetector = PiImageDetection()
     mydetector.main()
-© 2018 GitHub, Inc.
-Terms
-Privacy
-Security
-Status
-Help
-Contact GitHub
-Pricing
-API
-Training
-Blog
-About
-Press h to open a hovercard with more details.
